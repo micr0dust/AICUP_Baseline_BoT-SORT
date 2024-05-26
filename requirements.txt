@@ -10,7 +10,7 @@ thop
 ninja
 tabulate
 tensorboard
-lap
+# lap
 filterpy
 h5py
 matplotlib
