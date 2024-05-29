@@ -85,142 +85,116 @@ def detect(save_img=False):
     frameID = 0
 
     prev_frame = None
-    prev_results = None
     for path, img, im0s, vid_cap in tqdm(dataset, desc=f'tracking {opt.name}'):
         frameID += 1
 
-        # 將 img 轉為 numpy 以進行 SSIM 比較
-        img_np = img.squeeze().transpose(1, 2, 0)
+        # # 將 img 轉為 numpy 以進行 SSIM 比較
+        # img_np = img.squeeze().transpose(1, 2, 0)
 
-        # 比較當前幀與前一幀的 SSIM
+        # # 比較當前幀與前一幀的 SSIM
         same_img = False
-        if prev_frame is not None:
-            sim = ssim(prev_frame, img_np, multichannel=True)
-            if sim > 0.9:
-                same_img = True
-                for t in prev_results:
-                    tlwh = t.tlwh
-                    tlbr = t.tlbr
-                    tid = t.track_id
-                    tcls = t.cls
-                    if tlwh[2] * tlwh[3] > opt.min_box_area:
-                        online_tlwhs.append(tlwh)
-                        online_ids.append(tid)
-                        online_scores.append(t.score)
-                        online_cls.append(t.cls)
+        # if prev_frame is not None:
+        #     sim = ssim(prev_frame, img_np, channel_axis=-1)
+        #     if sim > 0.9:
+        #         same_img = True
+                
+        # prev_frame = img_np.copy()
 
-                        if save_img or view_img:  # Add bbox to image
-                            if opt.hide_labels_name:
-                                label = f'{tid}, {int(tcls)}'
-                            else:
-                                label = f'{tid}, {names[int(tcls)]}'
-                            
-                            if 'car' in label: # AICUP only have one cls: car
-                                # save results
-                                results.append(
-                                    f"{frameID},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},{t.score:.2f},-1,-1,-1\n"
-                                )
+        img = torch.from_numpy(img).to(device)
+        img = img.half() if half else img.float()  # uint8 to fp16/32
+        img /= 255.0  # 0 - 255 to 0.0 - 1.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
 
-                                plot_one_box(tlbr, im0, label=label, color=colors[int(tid) % len(colors)], line_thickness=2)
+        # Inference
+        t1 = time_synchronized()
+        pred = model(img, augment=opt.augment)[0]
 
-        if not same_img:
-            prev_results = []
-            img = torch.from_numpy(img).to(device)
-            img = img.half() if half else img.float()  # uint8 to fp16/32
-            img /= 255.0  # 0 - 255 to 0.0 - 1.0
-            if img.ndimension() == 3:
-                img = img.unsqueeze(0)
+        # Apply NMS
+        pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
+        t2 = time_synchronized()
 
-            # Inference
-            t1 = time_synchronized()
-            pred = model(img, augment=opt.augment)[0]
+        # Apply Classifier
+        if classify:
+            pred = apply_classifier(pred, modelc, img, im0s)
 
-            # Apply NMS
-            pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-            t2 = time_synchronized()
+        for i, det in enumerate(pred):  # detections per image
+            if webcam:  # batch_size >= 1
+                p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
+            else:
+                p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
 
-            # Apply Classifier
-            if classify:
-                pred = apply_classifier(pred, modelc, img, im0s)
+            # Run tracker
+            detections = []
+            if len(det):
+                boxes = scale_coords(img.shape[2:], det[:, :4], im0.shape)
+                boxes = boxes.cpu().numpy()
+                detections = det.cpu().numpy()
+                detections[:, :4] = boxes
 
-            for i, det in enumerate(pred):  # detections per image
-                if webcam:  # batch_size >= 1
-                    p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
-                else:
-                    p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
+            camID = int(path.split('/')[-1][0])
+            online_targets = tracker.update(detections, im0, camID, frameID, same_img)
 
-                # Run tracker
-                detections = []
-                if len(det):
-                    boxes = scale_coords(img.shape[2:], det[:, :4], im0.shape)
-                    boxes = boxes.cpu().numpy()
-                    detections = det.cpu().numpy()
-                    detections[:, :4] = boxes
+            online_tlwhs = []
+            online_ids = []
+            online_scores = []
+            online_cls = []
 
-                camID = int(path.split('/')[-1][0])
-                online_targets = tracker.update(detections, im0, camID, frameID)
+            for t in online_targets:
+                tlwh = t.tlwh
+                tlbr = t.tlbr
+                tid = t.track_id
+                tcls = t.cls
+                if tlwh[2] * tlwh[3] > opt.min_box_area:
+                    online_tlwhs.append(tlwh)
+                    online_ids.append(tid)
+                    online_scores.append(t.score)
+                    online_cls.append(t.cls)
 
-                online_tlwhs = []
-                online_ids = []
-                online_scores = []
-                online_cls = []
+                    if save_img or view_img:  # Add bbox to image
+                        if opt.hide_labels_name:
+                            label = f'{tid}, {int(tcls)}'
+                        else:
+                            label = f'{tid}, {names[int(tcls)]}'
+                        
+                        if 'car' in label: # AICUP only have one cls: car
+                            # save results
+                            results.append(
+                                f"{frameID},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},{t.score:.2f},-1,-1,-1\n"
+                            )
 
-                prev_results = online_targets.copy()
-                for t in online_targets:
-                    tlwh = t.tlwh
-                    tlbr = t.tlbr
-                    tid = t.track_id
-                    tcls = t.cls
-                    if tlwh[2] * tlwh[3] > opt.min_box_area:
-                        online_tlwhs.append(tlwh)
-                        online_ids.append(tid)
-                        online_scores.append(t.score)
-                        online_cls.append(t.cls)
+                            plot_one_box(tlbr, im0, label=label, color=colors[int(tid) % len(colors)], line_thickness=2)
 
-                        if save_img or view_img:  # Add bbox to image
-                            if opt.hide_labels_name:
-                                label = f'{tid}, {int(tcls)}'
-                            else:
-                                label = f'{tid}, {names[int(tcls)]}'
-                            
-                            if 'car' in label: # AICUP only have one cls: car
-                                # save results
-                                results.append(
-                                    f"{frameID},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},{t.score:.2f},-1,-1,-1\n"
-                                )
+                        
+        p = Path(p)  # to Path
+        save_path = str(save_dir / p.name)  # img.jpg
 
-                                plot_one_box(tlbr, im0, label=label, color=colors[int(tid) % len(colors)], line_thickness=2)
+        # Print time (inference + NMS)
+        # print(f'{s}Done. ({t2 - t1:.3f}s)')
 
-                            
-            p = Path(p)  # to Path
-            save_path = str(save_dir / p.name)  # img.jpg
+        # Stream results
+        if view_img:
+            cv2.imshow('BoT-SORT', im0)
+            cv2.waitKey(1)  # 1 millisecond
 
-            # Print time (inference + NMS)
-            # print(f'{s}Done. ({t2 - t1:.3f}s)')
-
-            # Stream results
-            if view_img:
-                cv2.imshow('BoT-SORT', im0)
-                cv2.waitKey(1)  # 1 millisecond
-
-            # Save results (image with detections)
-            if save_img:
-                if dataset.mode == 'image':
-                    cv2.imwrite(save_path, im0)
-                else:  # 'video' or 'stream'
-                    if vid_path != save_path:  # new video
-                        vid_path = save_path
-                        if isinstance(vid_writer, cv2.VideoWriter):
-                            vid_writer.release()  # release previous video writer
-                        if vid_cap:  # video
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        else:  # stream
-                            fps, w, h = 30, im0.shape[1], im0.shape[0]
-                            save_path += '.mp4'
-                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                    vid_writer.write(im0)
+        # Save results (image with detections)
+        if save_img:
+            if dataset.mode == 'image':
+                cv2.imwrite(save_path, im0)
+            else:  # 'video' or 'stream'
+                if vid_path != save_path:  # new video
+                    vid_path = save_path
+                    if isinstance(vid_writer, cv2.VideoWriter):
+                        vid_writer.release()  # release previous video writer
+                    if vid_cap:  # video
+                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    else:  # stream
+                        fps, w, h = 30, im0.shape[1], im0.shape[0]
+                        save_path += '.mp4'
+                    vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                vid_writer.write(im0)
 
     if save_txt or save_img:
         with open(save_dir / f"{opt.name}.txt", 'w') as f:

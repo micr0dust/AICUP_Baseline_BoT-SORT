@@ -145,12 +145,17 @@ def LSTM_predict_distance(tracks, detections, img_size=(1280, 720)):
     # Use LSTM to predict bbox for each track
     valid_track_bbox = []
     for track in tracks:
+        pastbbox = []
         if len(track.previous_bboxes)==1:
-            valid_track_bbox.append([[track.cam]+[0]*4,[track.cam]+track.previous_bboxes[-1].tolist()])
+            pastbbox=[[track.cam]+[0]*4,[track.cam]+track.previous_bboxes[-1].tolist()]
         elif len(track.previous_bboxes)>1:
-            valid_track_bbox.append([[track.cam]+track.previous_bboxes[-2].tolist(),[track.cam]+track.previous_bboxes[-1].tolist()])
-        else:
+            pastbbox=[[track.cam]+track.previous_bboxes[-2].tolist(),[track.cam]+track.previous_bboxes[-1].tolist()]
+
+        if len(pastbbox)==0 or exist_predict(pastbbox)==False:
+            track.previous_bboxes.clear()
             valid_track_bbox.append([])
+        else:
+            valid_track_bbox.append(pastbbox)
     
     valid_track_bbox = [[\
         [bbox_elem[0], bbox_elem[1]/img_size[0], bbox_elem[2]/img_size[1], bbox_elem[3]/img_size[0], bbox_elem[4]/img_size[1]]\
@@ -158,21 +163,22 @@ def LSTM_predict_distance(tracks, detections, img_size=(1280, 720)):
         for bbox in valid_track_bbox\
     ]
     # print('LSTM predict_bboxes:',valid_track_bbox)
-    predict_bboxes = [xywh_to_tlbr(predict(model, toptwobbox)) for toptwobbox in valid_track_bbox if len(toptwobbox)]
-    predict_bboxes = np.asarray([[bbox[0]*img_size[0], bbox[1]*img_size[1], bbox[2]*img_size[0], bbox[3]*img_size[1]] for bbox in predict_bboxes], dtype=np.float)
+    predict_bboxes = [xywh_to_tlbr(predict(model, toptwobbox)) if len(toptwobbox) else [] for toptwobbox in valid_track_bbox]
+    predict_bboxes = np.asarray([[bbox[0]*img_size[0], bbox[1]*img_size[1], bbox[2]*img_size[0], bbox[3]*img_size[1]] if len(bbox) else [0]*4 for bbox in predict_bboxes], dtype=np.float)
 
-    predict_exist = [exist_predict(toptwobbox) for toptwobbox in valid_track_bbox if len(toptwobbox)]
-    
     # Get bbox for each detection
     det_bboxes = [track.tlbr for track in detections]
 
     # Calculate IOU between track_bboxes and det_bboxes
     for i, track_bbox in enumerate(predict_bboxes):
         for j, det_bbox in enumerate(det_bboxes):
-            if predict_exist[i] == 0:
+            if np.all(sum(track_bbox)==0):
                 cost_matrix[i, j] = 1
             else:
-                cost_matrix[i, j] = 1 - ious(track_bbox.reshape(1, -1), det_bbox.reshape(1, -1))
+                iou_score = ious(track_bbox.reshape(1, -1), det_bbox.reshape(1, -1))
+                confidence_score = detections[j].score  # Assuming scores is a list of confidence values from YOLO
+                cost_matrix[i, j] = 1 - (iou_score * confidence_score)
+                # cost_matrix[i, j] = 1 - ious(track_bbox.reshape(1, -1), det_bbox.reshape(1, -1))
 
     return cost_matrix
 

@@ -137,7 +137,7 @@ class STrack(BaseTrack):
 
         self.update_cls(new_track.cls, new_track.score)
 
-    def update(self, new_track, frame_id):
+    def update(self, new_track, frame_id, same_img=False):
         """
         Update a matched track
         :type new_track: STrack
@@ -154,7 +154,8 @@ class STrack(BaseTrack):
         self._tlwh = new_tlwh
 
         # append new xywh for LSTM use
-        self.previous_bboxes.append(self.tlwh_to_xywh(self.tlwh))
+        if not same_img:
+            self.previous_bboxes.append(self.tlwh_to_xywh(self.tlwh))
 
         self.mean, self.covariance = self.kalman_filter.update(self.mean, self.covariance, self.tlwh_to_xywh(new_tlwh))
 
@@ -275,7 +276,7 @@ class BoTSORT(object):
 
         self.gmc = GMC(method=args.cmc_method, verbose=[args.name, args.ablation])
 
-    def update(self, output_results, img, camID, frameID=0):
+    def update(self, output_results, img, camID, frameID=0, same_img=False):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -362,7 +363,7 @@ class BoTSORT(object):
         if self.args.with_reid:
             emb_dists = matching.embedding_distance(strack_pool, detections) / 2.0
             raw_emb_dists = emb_dists.copy()
-            emb_dists[emb_dists > self.appearance_thresh] = 1.0
+            # emb_dists[emb_dists > self.appearance_thresh*2] = 1.0
 
             predict_dists = matching.LSTM_predict_distance(strack_pool, detections)
 
@@ -394,7 +395,7 @@ class BoTSORT(object):
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
+                track.update(detections[idet], self.frame_id, same_img=same_img)
                 activated_starcks.append(track)
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
@@ -443,7 +444,7 @@ class BoTSORT(object):
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
             if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id)
+                track.update(det, self.frame_id, same_img=same_img)
                 activated_starcks.append(track)
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
@@ -462,7 +463,7 @@ class BoTSORT(object):
             dists = matching.fuse_score(dists, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet], self.frame_id)
+            unconfirmed[itracked].update(detections[idet], self.frame_id, same_img=same_img)
             activated_starcks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
