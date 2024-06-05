@@ -12,6 +12,7 @@ _ext
 build/
 dist/
 wheels/
+*.ini
 
 # pytorch/python/numpy formats
 *.pth
