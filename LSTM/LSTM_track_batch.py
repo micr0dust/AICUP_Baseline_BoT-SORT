@@ -28,7 +28,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 
 epochs = 100
-input_size = 16
+input_size = 12
 hidden_size = 64
 output_size = 4
 lr = 0.001
@@ -46,13 +46,18 @@ cam_feature = np.array([track[0][0] for track in data]).reshape(-1, 1)
 cam_feature_onehot = encoder.fit_transform(cam_feature)
 
 # Prepare the sequences
-input_seq = [torch.tensor(np.concatenate((cam_feature_onehot[i].reshape(1, -1), track[0:2, 1:].reshape(1, -1)), axis=1), dtype=torch.float32) for i, track in enumerate(data)]
+input_seq = [
+    [torch.tensor(np.concatenate((cam_feature_onehot[i], track[j, 1:]), axis=0), dtype=torch.float32)
+     for j in range(2)]
+    for i, track in enumerate(data)]
 labels = [torch.tensor(track[2, 1:], dtype=torch.float32) for track in data]
-
+print(input_seq[0])
 # Split data into training and validation sets
 input_seq_train, input_seq_val, labels_train, labels_val = train_test_split(input_seq, labels, test_size=0.2, random_state=42)
 
 # Convert lists to tensors
+input_seq_train = [torch.stack(seq) for seq in input_seq_train]
+input_seq_val = [torch.stack(seq) for seq in input_seq_val]
 input_seq_train = pad_sequence(input_seq_train, batch_first=True)
 labels_train = torch.stack(labels_train)
 input_seq_val = pad_sequence(input_seq_val, batch_first=True)

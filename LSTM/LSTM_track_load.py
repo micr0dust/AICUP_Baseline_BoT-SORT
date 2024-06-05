@@ -8,7 +8,7 @@ model_path = '/content/drive/MyDrive/colab2/AIcup/train_LSTM/weight/last.pth'
 
 input_size = 16
 hidden_size = 64
-output_size = 4
+output_size = 1
 
 class LSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):

@@ -250,7 +250,7 @@ if __name__ == '__main__':
                         type=str, help="reid config file path")
     parser.add_argument('--proximity_thresh', type=float, default=0.5,
                         help='threshold for rejecting low overlap reid matches')
-    parser.add_argument('--appearance_thresh', type=float, default=0.25,
+    parser.add_argument('--appearance_thresh', type=float, default=0.30,#0.25
                         help='threshold for rejecting low appearance similarity reid matches')
 
     # LSTM (no use)

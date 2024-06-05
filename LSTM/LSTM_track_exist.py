@@ -26,9 +26,12 @@ from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import ConfusionMatrixDisplay
+
 
 epochs = 100
-input_size = 16
+input_size = 12
 hidden_size = 64
 output_size = 1
 lr = 0.001
@@ -46,13 +49,19 @@ cam_feature = np.array([track[0][0] for track in data]).reshape(-1, 1)
 cam_feature_onehot = encoder.fit_transform(cam_feature)
 
 # Prepare the sequences
-input_seq = [torch.tensor(np.concatenate((cam_feature_onehot[i].reshape(1, -1), track[0:2, 1:].reshape(1, -1)), axis=1), dtype=torch.float32) for i, track in enumerate(data)]
+input_seq = [
+    [torch.tensor(np.concatenate((cam_feature_onehot[i], track[j, 1:]), axis=0), dtype=torch.float32)
+     for j in range(2)]
+    for i, track in enumerate(data)]
 labels = [torch.tensor(1 if np.sum(track[2, 1:]) > 0 else 0, dtype=torch.float32) for track in data]  # Change labels to binary
-
+# print(input_seq[0])
 # Split data into training and validation sets
 input_seq_train, input_seq_val, labels_train, labels_val = train_test_split(input_seq, labels, test_size=0.2, random_state=42)
+print(len(labels_train), len(labels_val))
 
 # Convert lists to tensors
+input_seq_train = [torch.stack(seq) for seq in input_seq_train]
+input_seq_val = [torch.stack(seq) for seq in input_seq_val]
 input_seq_train = pad_sequence(input_seq_train, batch_first=True)
 labels_train = torch.stack(labels_train).squeeze()  # Remove the extra dimension
 input_seq_val = pad_sequence(input_seq_val, batch_first=True)
@@ -107,6 +116,8 @@ train_epoch_losses = []
 val_epoch_losses = []
 train_acc_scores = []
 val_acc_scores = []
+all_preds = []
+all_labels = []
 
 for epoch in range(epochs):
     model.train()
@@ -133,6 +144,8 @@ for epoch in range(epochs):
     val_losses = []
     val_corrects = 0
     total_val = 0
+    all_preds = []  # Reset the lists at the start of each epoch
+    all_labels = []
     with torch.no_grad():
         for seq, label in val_loader:
             seq, label = seq.to(device), label.to(device)  # Move data to the same device as the model
@@ -140,6 +153,8 @@ for epoch in range(epochs):
             loss = criterion(output, label)
             val_losses.append(loss.item())
             preds = torch.round(torch.sigmoid(output))  # Apply sigmoid and round to get binary predictions
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(label.cpu().numpy())
             val_corrects += (preds == label).sum().item()
             total_val += label.size(0)
 
@@ -154,6 +169,29 @@ for epoch in range(epochs):
 
 # Print model summary
 print(summary(model, input_size=(1, 10, input_size)))
+
+# train_precision = precision_score(label.cpu().numpy(), preds.cpu().numpy())
+# train_recall = recall_score(label.cpu().numpy(), preds.cpu().numpy())
+# train_f1 = f1_score(label.cpu().numpy(), preds.cpu().numpy())
+# train_confusion = confusion_matrix(label.cpu().numpy(), preds.cpu().numpy())
+
+val_precision = precision_score(all_labels, all_preds)
+val_recall = recall_score(all_labels, all_preds)
+val_f1 = f1_score(all_labels, all_preds)
+val_confusion = confusion_matrix(all_labels, all_preds)
+
+# 建立混淆矩陣的視覺化
+# train_disp = ConfusionMatrixDisplay(confusion_matrix=train_confusion)
+val_disp = ConfusionMatrixDisplay(confusion_matrix=val_confusion)
+
+# 繪製混淆矩陣
+# train_disp.plot()
+val_disp.plot()
+
+# print(f'Train Precision: {train_precision:.3f}, Train Recall: {train_recall:.3f}, Train F1: {train_f1:.3f}')
+# print(f'Train Confusion Matrix:\n {train_confusion}')
+print(f'Validation Precision: {val_precision:.3f}, Validation Recall: {val_recall:.3f}, Validation F1: {val_f1:.3f}')
+# print(f'Validation Confusion Matrix:\n {val_confusion}')
 
 # Plot training and validation accuracy
 plt.figure(figsize=(10, 5))
@@ -181,3 +219,4 @@ plt.show()
 model_path = '/content/drive/MyDrive/colab2/AIcup/train_LSTM/weight/exist_last.pth'
 if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
+
